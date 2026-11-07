@@ -1,0 +1,144 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ==========================================
+    // HELPER FUNCTIONS
+    // ==========================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isAuthenticated()
+             && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+             && getUserData().role == "admin";
+    }
+
+    function isTeacher() {
+      return isAuthenticated()
+             && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+             && getUserData().role == "teacher";
+    }
+
+    function isStudent() {
+      return isAuthenticated()
+             && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+             && getUserData().role == "student";
+    }
+
+    // ==========================================
+    // USERS COLLECTION
+    // ==========================================
+    match /users/{userId} {
+      // Students can self-register their own profile
+      // Admins can create teacher and student profiles
+      allow create: if isAuthenticated() && (
+        (request.auth.uid == userId && request.resource.data.role == "student")
+        || isAdmin()
+      );
+
+      // Users can read own profile; Admins can read all profiles;
+      // Teachers and students can read profiles
+      allow read: if isAuthenticated() && (
+        request.auth.uid == userId
+        || isAdmin()
+        || isTeacher()
+      );
+
+      // Users can update their own profile without altering role
+      // Admins can update any user profile (status, assignedSubjectId, etc.)
+      allow update: if isAuthenticated() && (
+        (request.auth.uid == userId && request.resource.data.role == resource.data.role)
+        || isAdmin()
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // ==========================================
+    // SUBJECTS COLLECTION
+    // ==========================================
+    match /subjects/{subjectId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ==========================================
+    // QUIZZES COLLECTION
+    // ==========================================
+    match /quizzes/{quizId} {
+      allow read: if isAuthenticated() && (
+        (resource.data.status == "published")
+        || (isTeacher() && resource.data.createdBy == request.auth.uid)
+        || isAdmin()
+      );
+
+      allow create: if isAdmin() || (
+        isTeacher() && request.resource.data.createdBy == request.auth.uid
+      );
+
+      allow update: if isAdmin() || (
+        isTeacher() && resource.data.createdBy == request.auth.uid
+      );
+
+      allow delete: if isAdmin() || (
+        isTeacher() && resource.data.createdBy == request.auth.uid
+      );
+    }
+
+    // ==========================================
+    // QUESTIONS (PRIVATE QUESTION BANK)
+    // ==========================================
+    match /questions/{questionId} {
+      allow read: if isAdmin() || isTeacher() || isStudent();
+      allow create, update, delete: if isAdmin() || isTeacher();
+    }
+
+    // ==========================================
+    // PUBLIC QUESTIONS
+    // ==========================================
+    match /publicQuestions/{questionId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin() || isTeacher();
+    }
+
+    // ==========================================
+    // ATTEMPTS COLLECTION
+    // ==========================================
+    match /attempts/{attemptId} {
+      allow create: if isAuthenticated() && (
+        (isStudent() && request.resource.data.userId == request.auth.uid)
+        || isAdmin()
+      );
+
+      allow read: if isAuthenticated() && (
+        (isStudent() && resource.data.userId == request.auth.uid)
+        || (isTeacher() && resource.data.teacherId == request.auth.uid)
+        || isAdmin()
+      );
+
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ==========================================
+    // ATTENDANCE COLLECTION
+    // ==========================================
+    match /attendance/{studentId} {
+      allow create, update: if isAuthenticated()
+                            && isStudent()
+                            && request.auth.uid == studentId
+                            && request.resource.data.userId == request.auth.uid
+                            && request.resource.data.status in ["active", "attempting", "inactive"];
+
+      allow read: if isAuthenticated() && isAdmin();
+      allow delete: if false;
+    }
+  }
+}
